@@ -1,0 +1,7 @@
+{
+  "name": "Copy of Vibe With Me",
+  "description": "Vibe With Me - The community-driven AI app builder. Create, share, and remix apps using natural language.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
