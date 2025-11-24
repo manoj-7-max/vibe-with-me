@@ -76,3 +76,8 @@ export interface MarketplaceItem {
   prompt: string; // The prompt used to generate it, allowing users to "remix"
   previewColor: string;
 }
+
+export interface SupabaseConfig {
+    url: string;
+    anonKey: string;
+}

@@ -1,154 +1,299 @@
-import { Project, User } from "../types";
+
+
+import { Project, User, SupabaseConfig } from "../types";
 import { DEFAULT_HTML } from "../constants";
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Simulation of a backend database using LocalStorage
-// In a production app, this would be replaced by API calls to Postgres/Firebase/Supabase
-
+// Keys for Local Storage
 const USERS_KEY = 'vibecoder_db_users';
 const PROJECTS_KEY = 'vibecoder_db_projects';
 const SESSION_KEY = 'vibecoder_session_user';
+const SUPABASE_CONFIG_KEY = 'vibecoder_supabase_config';
+
+let supabase: SupabaseClient | null = null;
+
+const isValidUrl = (urlString: string) => {
+    try { 
+        return Boolean(new URL(urlString)); 
+    }
+    catch(e){ 
+        return false; 
+    }
+}
+
+// --- Helper: Initialize Supabase if config exists ---
+const initSupabase = () => {
+    const configStr = localStorage.getItem(SUPABASE_CONFIG_KEY);
+    if (configStr) {
+        try {
+            const config: SupabaseConfig = JSON.parse(configStr);
+            if (config.url && config.anonKey) {
+                if (isValidUrl(config.url)) {
+                    supabase = createClient(config.url, config.anonKey);
+                    console.log("Vibe With Me: Supabase Connected");
+                } else {
+                    console.warn("Vibe With Me: Invalid Supabase URL stored, skipping connection.");
+                }
+            }
+        } catch (e) {
+            console.error("Failed to init Supabase:", e);
+        }
+    }
+};
+
+// Initialize on load
+initSupabase();
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const StorageService = {
-  
+
+  // Check if connected to real backend
+  isCloudEnabled(): boolean {
+    return !!supabase;
+  },
+
+  // Save connection details
+  saveSupabaseConfig(config: SupabaseConfig) {
+    localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify(config));
+    initSupabase();
+    // Clear local session to force re-login with Supabase
+    localStorage.removeItem(SESSION_KEY);
+  },
+
+  clearSupabaseConfig() {
+    localStorage.removeItem(SUPABASE_CONFIG_KEY);
+    supabase = null;
+    localStorage.removeItem(SESSION_KEY);
+  },
+
   // --- AUTHENTICATION ---
 
-  // Simulate sending an OTP
-  async sendOtp(contact: string, type: 'email' | 'phone'): Promise<void> {
-    await delay(1000); // Network delay
-    // In a real app, this would call an API to send Email or SMS via Twilio/SendGrid
-    console.log(`[Simulated Backend] OTP sent to ${type} ${contact}: 123456`);
-    return;
+  async sendOtp(email: string): Promise<void> {
+    if (supabase) {
+        // We do NOT use emailRedirectTo. This avoids the "URL not whitelisted" error.
+        // If emails still fail, it is likely the Supabase SMTP rate limit.
+        const result = await supabase.auth.signInWithOtp({ 
+            email: email,
+            options: {
+                shouldCreateUser: true
+            }
+        });
+        const error = result.error;
+
+        if (error) {
+            console.error("Supabase Auth Error:", error);
+            throw error; 
+        }
+    } else {
+        // Sandbox Mode
+        await delay(1000);
+        console.log(`[Sandbox] OTP sent to ${email}: 123456`);
+    }
   },
 
-  // Verify OTP and Login/Signup
-  async verifyOtp(contact: string, code: string, type: 'email' | 'phone'): Promise<User> {
-    await delay(800);
-    
-    if (code !== '123456') {
-        throw new Error("Invalid verification code.");
-    }
+  async verifyOtp(email: string, code: string): Promise<User> {
+    if (supabase) {
+        const result = await supabase.auth.verifyOtp({
+            email: email,
+            token: code,
+            type: 'email',
+        });
+        const data = result.data;
+        const error = result.error;
 
-    const users = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
-    
-    // Find existing user by email or phone
-    let user = users.find((u: any) => 
-        (type === 'email' && u.email === contact) || 
-        (type === 'phone' && u.phoneNumber === contact)
-    );
+        if (error) throw error;
+        if (!data.user) throw new Error("Verification failed");
 
-    if (!user) {
-        // Create new user
-        user = {
-            id: 'user_' + Date.now(),
-            name: type === 'email' ? contact.split('@')[0] : `User ${contact.slice(-4)}`,
-            email: type === 'email' ? contact : undefined,
-            phoneNumber: type === 'phone' ? contact : undefined,
-            avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${contact}`,
-            createdAt: new Date(),
-            provider: type
+        const user: User = {
+            id: data.user.id,
+            name: data.user.user_metadata?.full_name || email.split('@')[0] || 'Creator',
+            email: data.user.email,
+            avatar: data.user.user_metadata?.avatar_url,
+            createdAt: new Date(data.user.created_at),
+            provider: 'email'
         };
-        users.push(user);
-        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        return user;
+    } else {
+        // Sandbox Mode
+        await delay(800);
+        if (code !== '123456') throw new Error("Invalid verification code (Try 123456).");
+
+        const users = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
+        let user = users.find((u: any) => u.email === email);
+
+        if (!user) {
+            user = {
+                id: 'user_' + Date.now(),
+                name: email.split('@')[0],
+                email: email,
+                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`,
+                createdAt: new Date(),
+                provider: 'email'
+            };
+            users.push(user);
+            localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        }
+        localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+        return user;
     }
-
-    localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-    return user;
-  },
-
-  async socialLogin(provider: 'google'): Promise<User> {
-    await delay(1500); // Simulate popup and redirect
-    
-    // Mock Google User
-    const mockGoogleUser = {
-        email: 'demo.user@gmail.com',
-        name: 'Demo User',
-        avatar: 'https://lh3.googleusercontent.com/a/ACg8ocIu1_3_8_3_8_3_8=s96-c' // Generic Google-like avatar url placeholder or use dicebear
-    };
-
-    const users = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
-    let user = users.find((u: any) => u.email === mockGoogleUser.email);
-
-    if (!user) {
-        user = {
-            id: 'user_google_' + Date.now(),
-            name: mockGoogleUser.name,
-            email: mockGoogleUser.email,
-            avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=google${Date.now()}`, // Using dicebear for consistency
-            createdAt: new Date(),
-            provider: 'google'
-        };
-        users.push(user);
-        localStorage.setItem(USERS_KEY, JSON.stringify(users));
-    }
-
-    localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-    return user;
   },
 
   async signOut(): Promise<void> {
-    await delay(200);
+    if (supabase) {
+        await supabase.auth.signOut();
+    } else {
+        await delay(200);
+    }
     localStorage.removeItem(SESSION_KEY);
   },
 
   async getCurrentUser(): Promise<User | null> {
-    const session = localStorage.getItem(SESSION_KEY);
-    if (!session) return null;
-    return JSON.parse(session);
+    if (supabase) {
+        // Check Supabase session
+        const { data } = await supabase.auth.getSession();
+        if (data.session?.user) {
+             const u = data.session.user;
+             return {
+                 id: u.id,
+                 name: u.user_metadata?.full_name || u.email?.split('@')[0] || 'Creator',
+                 email: u.email,
+                 phoneNumber: u.phone,
+                 avatar: u.user_metadata?.avatar_url,
+                 createdAt: new Date(u.created_at),
+                 provider: u.app_metadata?.provider || 'email' as any
+             };
+        }
+        return null;
+    } else {
+        // Sandbox
+        const session = localStorage.getItem(SESSION_KEY);
+        if (!session) return null;
+        return JSON.parse(session);
+    }
   },
 
   // --- DATABASE (PROJECTS) ---
 
   async getProjects(userId: string): Promise<Project[]> {
-    await delay(300);
-    const allProjects = JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]');
-    
-    // Filter projects belonging to this user
-    const userProjects = allProjects.filter((p: any) => p.userId === userId);
-    
-    // Hydrate dates
-    return userProjects.map((p: any) => ({
-        ...p,
-        lastModified: new Date(p.lastModified),
-        history: p.history.map((h: any) => ({...h, timestamp: new Date(h.timestamp)}))
-    }));
+    if (supabase) {
+        const { data, error } = await supabase
+            .from('projects')
+            .select('*')
+            .order('last_modified', { ascending: false });
+        
+        if (error) {
+            console.error("DB Error:", error);
+            return [];
+        }
+
+        return data.map((p: any) => ({
+            id: p.id,
+            userId: p.user_id,
+            name: p.name,
+            description: p.description,
+            lastModified: new Date(p.last_modified),
+            currentHtml: p.current_html,
+            thumbnail: p.thumbnail,
+            history: p.history || [],
+            snapshots: p.snapshots || []
+        }));
+
+    } else {
+        await delay(300);
+        const allProjects = JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]');
+        const userProjects = allProjects.filter((p: any) => p.userId === userId);
+        return userProjects.map((p: any) => ({
+            ...p,
+            lastModified: new Date(p.lastModified),
+            history: p.history.map((h: any) => ({...h, timestamp: new Date(h.timestamp)}))
+        }));
+    }
   },
 
   async createProject(userId: string, template?: { name: string, description: string }): Promise<Project> {
-    await delay(400);
-    const newProject: Project = {
-        id: 'proj_' + Date.now(),
-        userId,
+    const newProjectBase = {
         name: template ? template.name : 'Untitled Project',
         description: template ? template.description : 'A new vibe.',
-        lastModified: new Date(),
-        currentHtml: DEFAULT_HTML,
-        history: []
+        current_html: DEFAULT_HTML,
+        history: [],
+        snapshots: [],
+        last_modified: new Date().toISOString()
     };
 
-    const allProjects = JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]');
-    allProjects.unshift(newProject); // Add to top
-    localStorage.setItem(PROJECTS_KEY, JSON.stringify(allProjects));
+    if (supabase) {
+        const { data, error } = await supabase
+            .from('projects')
+            .insert([{ ...newProjectBase, user_id: userId }])
+            .select()
+            .single();
+        
+        if (error) throw error;
 
-    return newProject;
+        return {
+            id: data.id,
+            userId: data.user_id,
+            name: data.name,
+            description: data.description,
+            lastModified: new Date(data.last_modified),
+            currentHtml: data.current_html,
+            thumbnail: data.thumbnail,
+            history: data.history || [],
+            snapshots: data.snapshots || []
+        };
+
+    } else {
+        await delay(400);
+        const newProject: Project = {
+            id: 'proj_' + Date.now(),
+            userId,
+            name: newProjectBase.name,
+            description: newProjectBase.description,
+            lastModified: new Date(),
+            currentHtml: newProjectBase.current_html,
+            history: []
+        };
+        const allProjects = JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]');
+        allProjects.unshift(newProject);
+        localStorage.setItem(PROJECTS_KEY, JSON.stringify(allProjects));
+        return newProject;
+    }
   },
 
   async updateProject(project: Project): Promise<void> {
-    // No artificial delay for typing/updates to feel snappy
-    const allProjects = JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]');
-    const index = allProjects.findIndex((p: any) => p.id === project.id);
-    
-    if (index !== -1) {
-        allProjects[index] = project;
-        localStorage.setItem(PROJECTS_KEY, JSON.stringify(allProjects));
+    if (supabase) {
+        const { error } = await supabase
+            .from('projects')
+            .update({
+                name: project.name,
+                description: project.description,
+                current_html: project.currentHtml,
+                thumbnail: project.thumbnail,
+                history: project.history,
+                snapshots: project.snapshots,
+                last_modified: new Date().toISOString()
+            })
+            .eq('id', project.id);
+        
+        if (error) console.error("Failed to save project:", error);
+    } else {
+        const allProjects = JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]');
+        const index = allProjects.findIndex((p: any) => p.id === project.id);
+        if (index !== -1) {
+            allProjects[index] = project;
+            localStorage.setItem(PROJECTS_KEY, JSON.stringify(allProjects));
+        }
     }
   },
 
   async deleteProject(projectId: string): Promise<void> {
-    await delay(300);
-    const allProjects = JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]');
-    const filtered = allProjects.filter((p: any) => p.id !== projectId);
-    localStorage.setItem(PROJECTS_KEY, JSON.stringify(filtered));
+    if (supabase) {
+        await supabase.from('projects').delete().eq('id', projectId);
+    } else {
+        await delay(300);
+        const allProjects = JSON.parse(localStorage.getItem(PROJECTS_KEY) || '[]');
+        const filtered = allProjects.filter((p: any) => p.id !== projectId);
+        localStorage.setItem(PROJECTS_KEY, JSON.stringify(filtered));
+    }
   }
 };

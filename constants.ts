@@ -1,4 +1,5 @@
 
+
 import { Template, MarketplaceItem } from './types';
 
 export const INITIAL_SYSTEM_INSTRUCTION = `
@@ -20,6 +21,39 @@ HTML GUIDELINES:
 4. Make it LOOK AMAZING. Dark mode by default, modern typography, gradients, rounded corners, nice shadows.
 5. It should be responsive and mobile-friendly.
 6. If the user asks for interactivity (e.g., a calculator, a to-do list), write the JavaScript logic inside <script> tags within the HTML.
+`;
+
+export const SUPABASE_SCHEMA_SQL = `
+-- 1. Run this in your Supabase SQL Editor to set up the database
+create table projects (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references auth.users(id) not null,
+  name text not null,
+  description text,
+  current_html text,
+  thumbnail text,
+  history jsonb default '[]'::jsonb,
+  snapshots jsonb default '[]'::jsonb,
+  last_modified timestamptz default now(),
+  created_at timestamptz default now()
+);
+
+alter table projects enable row level security;
+
+create policy "Users can view their own projects" on projects for select using (auth.uid() = user_id);
+create policy "Users can insert their own projects" on projects for insert with check (auth.uid() = user_id);
+create policy "Users can update their own projects" on projects for update using (auth.uid() = user_id);
+create policy "Users can delete their own projects" on projects for delete using (auth.uid() = user_id);
+
+-- 2. ENABLE AUTH PROVIDERS (Supabase Dashboard)
+-- Go to Authentication -> Providers. Enable 'Email'.
+
+-- 3. CRITICAL: FIX EMAIL ERRORS (Use Custom SMTP)
+-- If you see "Error sending confirmation email", you MUST configure SMTP.
+-- 1. Get a free API Key from resend.com
+-- 2. In Supabase: Settings -> SMTP Settings -> Enable Custom SMTP
+-- 3. Host: smtp.resend.com, Port: 465, User: resend, Pass: [Your API Key]
+-- 4. Sender Email: onboarding@resend.dev
 `;
 
 export const SAMPLE_TEMPLATES: Template[] = [
@@ -145,7 +179,7 @@ export const DEFAULT_HTML = `<!DOCTYPE html>
 <body>
   <div class="text-center space-y-4">
     <div class="inline-block p-4 rounded-full bg-purple-500/10 text-purple-400 animate-pulse-slow">
-      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5"></path><path d="M8.5 8.5v.01"></path><path d="M16 12v.01"></path><path d="M12 16v.01"></path></svg>
+      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5 4 4 0 0 1-5-5 4 4 0 0 1-5-5"></path><path d="M8.5 8.5v.01"></path><path d="M16 12v.01"></path><path d="M12 16v.01"></path></svg>
     </div>
     <h1 class="text-3xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600">
       Vibe With Me

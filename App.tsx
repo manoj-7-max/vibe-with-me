@@ -81,6 +81,21 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDeleteProject = async (projectId: string) => {
+      if (window.confirm("Are you sure you want to delete this project? This cannot be undone.")) {
+          try {
+              await StorageService.deleteProject(projectId);
+              setProjects(prev => prev.filter(p => p.id !== projectId));
+              if (activeProject?.id === projectId) {
+                  setActiveProject(null);
+                  setView(AppView.DASHBOARD);
+              }
+          } catch (e) {
+              console.error("Failed to delete project", e);
+          }
+      }
+  };
+
   const initializeProjectWithPrompt = async (project: Project, prompt: string) => {
     // Set initial state for immediate UI feedback
     setActiveProject(project);
@@ -193,6 +208,7 @@ const App: React.FC = () => {
           onCreateNew={handleCreateProject}
           onOpenProject={handleOpenProject}
           onNavigateToMarket={() => handleNavigate(AppView.MARKETPLACE)}
+          onDeleteProject={handleDeleteProject}
         />
       )}
       {view === AppView.MARKETPLACE && (

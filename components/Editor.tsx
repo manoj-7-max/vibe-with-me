@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Play, Code, Monitor, Smartphone, Tablet, Download, ChevronLeft, Loader2 } from 'lucide-react';
 import { Project, ChatMessage } from '../types';
 import { generateAppCode } from '../services/gemini';
@@ -15,12 +16,42 @@ export const Editor: React.FC<EditorProps> = ({ project, onUpdateProject, onBack
   const [viewport, setViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [showCode, setShowCode] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  // Scroll chat to bottom
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [project.history]);
+
+  // Listen for thumbnail generation messages from the iframe
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+        if (e.data && e.data.type === 'THUMBNAIL_GENERATED') {
+            // Update project with new thumbnail, but only if it changed to avoid loops
+            // (Actually just update it, React state batching handles simple redundancy, but let's be safe)
+            if (project.thumbnail !== e.data.data) {
+                const updated = { ...project, thumbnail: e.data.data };
+                onUpdateProject(updated);
+            }
+        }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [project, onUpdateProject]);
+
+  // Auto-trigger capture when code changes (debounced)
+  useEffect(() => {
+    if (!isGenerating && iframeRef.current) {
+        const timer = setTimeout(() => {
+            // Send trigger to iframe
+            iframeRef.current?.contentWindow?.postMessage('CAPTURE_THUMBNAIL', '*');
+        }, 2000); // Wait 2s for render to settle
+        return () => clearTimeout(timer);
+    }
+  }, [project.currentHtml, isGenerating]);
 
   const handleSend = async () => {
     if (!input.trim() || isGenerating) return;
@@ -33,7 +64,6 @@ export const Editor: React.FC<EditorProps> = ({ project, onUpdateProject, onBack
     };
 
     const updatedHistory = [...project.history, userMessage];
-    // Optimistic update
     onUpdateProject({ ...project, history: updatedHistory });
     setInput('');
     setIsGenerating(true);
@@ -81,6 +111,40 @@ export const Editor: React.FC<EditorProps> = ({ project, onUpdateProject, onBack
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  // Helper to inject the screenshot script
+  const getPreviewHtml = () => {
+      // We inject a script that listens for the 'CAPTURE_THUMBNAIL' message,
+      // takes a screenshot using html2canvas, and posts it back to the parent.
+      const captureScript = `
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+        <script>
+            window.addEventListener('message', function(e) {
+                if (e.data === 'CAPTURE_THUMBNAIL') {
+                    // Use html2canvas to capture the body
+                    html2canvas(document.body, {
+                        useCORS: true,
+                        allowTaint: true,
+                        logging: false,
+                        backgroundColor: '#09090b', // Default to dark bg if transparent
+                        scale: 0.5 // Half scale is enough for thumbnails
+                    }).then(canvas => {
+                        window.parent.postMessage({
+                            type: 'THUMBNAIL_GENERATED',
+                            data: canvas.toDataURL('image/jpeg', 0.7)
+                        }, '*');
+                    }).catch(err => console.error('Thumbnail capture failed:', err));
+                }
+            });
+        </script>
+      `;
+      
+      // Naive injection before </body>. If no body tag, append to end.
+      if (project.currentHtml.includes('</body>')) {
+          return project.currentHtml.replace('</body>', captureScript + '</body>');
+      }
+      return project.currentHtml + captureScript;
   };
 
   return (
@@ -243,7 +307,8 @@ export const Editor: React.FC<EditorProps> = ({ project, onUpdateProject, onBack
                     `}
                 >
                     <iframe 
-                        srcDoc={project.currentHtml}
+                        ref={iframeRef}
+                        srcDoc={getPreviewHtml()}
                         className="w-full h-full bg-white"
                         title="Live Preview"
                         sandbox="allow-scripts allow-modals allow-forms allow-popups allow-same-origin"
